@@ -1,0 +1,395 @@
+---
+title: "Eesti presidentide kõned"
+output: html_notebook
+---
+
+```{r setup, message = FALSE}
+## Lae andmed ja paketid
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(tidytext)
+library(tidyr)
+library(ggplot2)
+library(igraph)
+library(ggraph)
+library(readr)
+library(scales)
+library(extrafont)
+library(ggthemes)
+
+load("data/presidentide_koned.RData")
+load("data/stop_words_est.RData")
+load("data/sonade_emotsioon_est.RData")
+```
+
+```{r andmetootlus}
+
+# Tee kõnede andmetele eeltöötlus
+presidentide_koned_toodeldud <- presidentide_konad %>%
+    tbl_df() %>%
+    filter(!str_detect(kuupaev, "[a-q]")) %>%
+    mutate(kuupaev_date = dmy(kuupaev),  # kuupäev date foraati
+           president = ifelse(is.na(president), "Arnold Rüütel", president),
+           # kustuta kõne tekstist üleliigset infot
+           tekst = str_replace_all(tekst, 
+                                   "(Kõnede arhiiv)$|(Kõne video ERR veebilehel\\.)$|(ERR video)$", ""),
+           tekst = str_replace_all(tekst, pealkiri, ""))
+
+# Eralda Vabariigi aastapäeva kõnede tabel 
+vabariigi_aastapaeva_koned <- presidentide_koned_toodeldud %>%
+    filter(str_detect(kuupaev, "24.02"))
+
+# Üksikud sõnad Vabariigi aastapäeva kõnedest
+konede_sonad <- vabariigi_aastapaeva_koned %>%
+    unnest_tokens(word, tekst) %>%
+    # lisa sorteerimiseks unikaalne id
+    mutate(id = row_number()) %>%
+    # eemalda nn stoppsõnad
+    anti_join(stop_words_est, by = c("word" = "sona")) %>%
+    filter(!str_detect(word, "[0-9]")) %>%
+    arrange(id)
+
+# Koosta kõnede bigramm tabel Vabariigi aastapäeva kõnedest
+konede_bigram <- vabariigi_aastapaeva_koned %>%
+    unnest_tokens(bigram, tekst, token = "ngrams", n = 2) %>%
+    mutate(id = row_number(),
+           # täpitähtede parandamine
+           bigram = str_replace_all(bigram, "ć¤", "ä"),
+           bigram = str_replace_all(bigram, "ćµ", "õ"),
+           bigram = str_replace_all(bigram, "ć¼", "ü"),
+           bigram = str_replace_all(bigram, "ć¶", "ö"))  %>%
+    arrange(id)
+
+# Eralda bigram kaheks sõnaks, et neist omakorda stoppsõnad eemaldada
+koned_bigram_separated <- konede_bigram %>%
+    separate(bigram, c("word1", "word2"), sep = " ")
+
+# Eemalda stoppsõnu sisaldavad bigrammid
+koned_bigram_filtered <- koned_bigram_separated %>%
+    filter(!word1 %in% stop_words_est$sona) %>%
+    filter(!word2 %in% stop_words_est$sona) %>%
+    unite(bigram, word1, word2, sep = " ")
+
+# Üksikud sõnad kõikides kõnedest
+koigi_konede_sonad <- presidentide_koned_toodeldud %>%
+    unnest_tokens(word, tekst) %>%
+    # lisa sorteerimiseks unikaalne id
+    mutate(id = row_number()) %>%
+    # eemalda nn stoppsõnad
+    anti_join(stop_words_est, by = c("word" = "sona")) %>%
+    filter(!str_detect(word, "[0-9]")) %>%
+    arrange(id)
+
+
+# Koosta kõigi kõnede bigramm tabel
+koigi_konede_bigram <- presidentide_koned_toodeldud %>%
+    unnest_tokens(bigram, tekst, token = "ngrams", n = 2) %>%
+    mutate(id = row_number(),
+           # täpitähtede parandamine
+           bigram = str_replace_all(bigram, "ć¤", "ä"),
+           bigram = str_replace_all(bigram, "ćµ", "õ"),
+           bigram = str_replace_all(bigram, "ć¼", "ü"),
+           bigram = str_replace_all(bigram, "ć¶", "ö"))  %>%
+    arrange(id)
+
+# Eralda bigram kaheks sõnaks, et neist omakorda stoppsõnad eemaldada
+koigi_koned_bigram_separated <- koigi_konede_bigram %>%
+    separate(bigram, c("word1", "word2"), sep = " ")
+
+# Eemalda stoppsõnu sisaldavad bigrammid
+koigi_koned_bigram_filtered <- koigi_koned_bigram_separated %>%
+    filter(!word1 %in% stop_words_est$sona) %>%
+    filter(!word2 %in% stop_words_est$sona) %>%
+    unite(bigram, word1, word2, sep = " ") %>%
+    filter(!str_detect(bigram, "[0-9]"))
+
+```
+
+Seoses huviga tekstianalüüsi ja teksti visualiseerimise vastu, tekkis mõte uurida pisut Eesti presidentide kõnesid ja katsetada mõnda tekstianalüüsi ja -visualiseerimise meetodit. Aluseks võtsin R tekstianalüüsi võimalusi tutvustava e-raamatu [Tidy Text Mining with R](http://tidytextmining.com/).
+
+[president.ee](http://president.ee) lehelt on kättesaadavad kõik taasiseseisvunud Eestis peetud presidentide avalikud kõned. Kuna 24 aasta kõnede koguhulk on üpris suur (üle 1350) ja kõned on väga eriilmelised, siis keskendun Vabariigi aastapäeval peetud kõnedele.
+
+Alustuseks vaatan kõiki 24. veebruari kõnesid kokku ning neis enamlevinud sõnasid ja bigramme (kahest järjestikusest sõnast koosevada sõnaühendid). Üksikutest sõnadest domineerib __eesti__, mida on järgmisest sõnast __euroopa__ kasutatud üle kolme korra rohkem. Ka bigrammide puhul on esikohal eesti ja euroopaga seotud sõnaühendid. Samas detailsemat tunnetust kõnede sisust need enamlevinud sõnad siiski ei anna.
+
+```{r graafik_top_sonad_bigrammid, warning = FALSE, message = FALSE}
+# top 20 sõna graafikul
+top_sonad <- konede_sonad %>%
+    count(word, sort = TRUE) %>%
+    # top 20
+    top_n(., 20) %>%
+    ungroup() %>%
+    # reasta sõnad kahanevalt
+    mutate(word = reorder(word, n)) %>%
+    ggplot(aes(word, n)) +
+    geom_bar(stat = "identity", fill = "#2b8cbe", alpha = 0.7) +
+    # kaota tühi ruum y-skaala ümber
+    scale_y_continuous(expand = c(0, 0)) +
+    coord_flip() +
+    labs(title = "TOP 20 sõna presidentide aastapäeva kõnedes",
+         subtitle = "Arvesse on võetud kogu 24-aastane periood",
+         y = "sõna esinemissagedus") +
+    theme_bw(base_family = "Chivo") +
+    theme(axis.title.y = element_blank(),
+          axis.title.x = element_text(size = 10),
+          panel.border = element_blank())
+
+# Top 20 bigrammi graafikule
+top_bigrammm <- koned_bigram_filtered %>%
+    count(bigram, sort = TRUE) %>%
+    # top 20
+    top_n(., 20) %>%
+    ungroup() %>%
+    # reasta sõnad kahanevalt
+    mutate(bigram = reorder(bigram, n)) %>%
+    ggplot(aes(bigram, n)) +
+    geom_bar(stat = "identity", fill = "#2b8cbe", alpha = 0.7) +
+    # kaota tühi ruum y-skaala ümber
+    scale_y_continuous(expand = c(0, 0)) +
+    coord_flip() +
+    labs(title = "TOP 20 sõnaühendit presidentide aastapäeva kõnedes",
+         subtitle = "Arvesse on võetud kogu 24-aastane periood",
+         y = "sõnaühendi esinemissagedus") +
+    theme_bw(base_family = "Chivo") +
+    theme(axis.title.y = element_blank(),
+          axis.title.x = element_text(size = 10),
+          panel.border = element_blank())
+
+# Kuva korraga mõlemad graafikud
+print(top_sonad)
+print(top_bigrammm)
+```
+
+Lisaks tavalisele *barchart'le* kasutasin enamlevinud bigrammide kujutamiseks ka *network* graafikut. Sellel on kujutatud sõnaühendid, mis esinesid kõnedes vähemalt 5 korda.
+
+```{r bigramm_network, message=FALSE, warning=FALSE, fig.width = 8, fig.height = 6}
+# Bigram network graafiku tegemiseks andmed sobivasse formaati (igraph library abil)
+koned_bigram_network <- koned_bigram_separated %>%
+    # eemdalda stoppsõnad
+    filter(!word1 %in% stop_words_est$sona) %>%
+    filter(!word2 %in% stop_words_est$sona) %>%
+    count(word1, word2, sort = TRUE) %>%
+    # ainult need bigrammid, mida on kokku vähemalt 5
+    filter(n > 4) %>%
+    graph_from_data_frame()
+
+# selleks, et graafiku paigutus oleks samasugune
+set.seed(2016)
+
+# network graafikus kasutatav nool
+a <- grid::arrow(type = "closed", length = unit(.3, "cm"))
+
+# joonista network bigrammide kohta
+ggraph(koned_bigram_network, layout = "fr") +
+    geom_node_point(color = "#2b8cbe", size = 5, alpha = 0.8) +
+    geom_edge_link(aes(edge_alpha = n), show.legend = FALSE, arrow = a) +
+    geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+    labs(title = "Enamlevinud sõnaühendid presidentide aastapäeva kõnedes",
+         subtitle = "Nool näitab, millises järjekorras sõnad kõnedes koos esinesid. \nMida tumedam nool, seda sagedasem vastav sõnaühend on") +
+    theme_void(base_family = "Chivo")
+
+```
+
+
+### Presidentidele iseloomulikud sõnad kõnedes
+
+Kuna sõnade ja bigrammide esinemissagedus üksinda ei andnud väga palju infot kõnede kohta, siis leian Vabariigi aastapäeva kõnedest igale presidendile kõige iseloomulikumad sõnad. Seda saab teha mõõdiku *tf-idf (term frequency–inverse document frequency)* abil. Sisuliselt aitab see tuvastada sõnu, mis kõigis kõnedes kokku on suhteliselt vähe levinud, aga konkreetse presidendi kõnedes on sagedasemad. Tulemustest joonistub näiteks päris hästi välja president Rüütlile oluline __omavalitsuste__ ja __koostöö__ teema. President Ilves on aga oma aastapäeva kõnedes teistest rohkem tähelepanu pööranud __ettevõtjatele, rahale__ ja __keelele__.
+
+```{r aastapaeva_kone_tf_idf, message=FALSE, warning=FALSE, fig.height=6, fig.width=7}
+# Presidentidele kõige iseloomulikumad sõnad kõnedes
+konede_sonad %>%
+    count(president, word, sort = TRUE) %>%
+    ungroup() %>%
+    # leia sõnade tähtsus iga presidendi kohta (kõige iseloomulikumad sõnad)
+    bind_tf_idf(word, president, n) %>%
+    arrange(desc(tf_idf)) %>%
+    mutate(word = factor(word, levels = rev(unique(word))),
+           president = factor(president, levels = c("Lennart Meri",
+                                                    "Arnold Rüütel",
+                                                    "Toomas Hendrik Ilves"))) %>%
+    group_by(president) %>% 
+    top_n(10) %>% 
+    ungroup() %>%
+    ggplot(aes(word, tf_idf, fill = president)) +
+    geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+    labs(title = "Presidentidele iseloomulikud sõnad aastapäeva kõnedes",
+         subtitle = "Sõnade tähtsuse hindamise mõõtühikuks on tf-idf (term frequency–inverse document frequency)",
+         x = NULL, y = NULL) +
+    scale_y_continuous(labels = comma) +
+    facet_wrap(~president, ncol = 2, scales = "free") +
+    coord_flip() +
+    theme_tufte() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_text(size = 9),
+          text = element_text(family = "Chivo"),
+          plot.title = element_text(size = 14, face = "bold"),
+          strip.text = element_text(size = 11))
+```
+
+Kui graafikule kanda presidentidele iseloomulikud sõnad ja bigrammid kõigist 1350-st kõnest kokku, siis tulevad hästi välja nende jaoks olulised teemad või vastaval ajahetkel tähtsad sündmused. Näiteks Ilvese ametiaega jäänud Kaitseväe __välismissioonid__ ja __Krimmi__ okupeerimine ning presidendile hingelähedased __küberkaitse__ ja __vabakonna__ teemad. 
+
+Arnold Rüütli puhul äratab tähelepanu esikohal olev __Armeenia__. Tegemist ei ole aga ülevoolava Armeenia lembusega vaid paaril visiidil Armeeni presidendi auks peetud kõnega. Hoopis iseloomulikumad on ilmselt __põllumajandusele, maaelanikele, regionaalarengule ja ühiskondlikule leppele__ viitavad sõnad.
+
+Lennart Merile iseloomulike sõnade nimekirja tipus on __CSCE__ (hilisem OSCE), organisatsioon, mida president väga oluliseks pidas. Lisaks annavad tooni ajastule vastavad sõnad nagu vägede __väljaviimine__, riigi __reforimid__, __Paldiskiga__ seotud teemad ja viited __Venemaale__.
+
+```{r kokku_kone_tf_idf, message=FALSE, warning=FALSE, fig.width = 8, fig.height = 7}
+
+# Presidentidele kõige iseloomulikumad sõnad kõigis kõnedes kokku
+koigi_konede_sonad %>%
+    filter(word != "rüütelkadriorus") %>%
+    count(president, word, sort = TRUE) %>%
+    ungroup() %>%
+    # leia sõnade tähtsus iga presidendi kohta (kõige iseloomulikumad sõnad)
+    bind_tf_idf(word, president, n) %>%
+    arrange(desc(tf_idf)) %>%
+    mutate(word = factor(word, levels = rev(unique(word))),
+           president = factor(president, levels = c("Lennart Meri",
+                                                    "Arnold Rüütel",
+                                                    "Toomas Hendrik Ilves"))) %>%
+    group_by(president) %>% 
+    top_n(15) %>% 
+    ungroup() %>%
+    ggplot(aes(word, tf_idf, fill = president)) +
+    geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+    labs(title = "Presidentidele iseloomulikud sõnad kõnedes kokku",
+         subtitle = "Sõnade tähtsuse hindamise mõõtühikuks on tf-idf (term frequency–inverse document frequency)",
+         x = NULL, y = NULL) +
+    scale_y_continuous(labels = comma) +
+    facet_wrap(~president, ncol = 2, scales = "free") +
+    coord_flip() +
+    theme_tufte() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_text(size = 9),
+          text = element_text(family = "Chivo"),
+          plot.title = element_text(size = 14, face = "bold"),
+          strip.text = element_text(size = 11))
+
+
+# Presidentide kõige iseloomulikumad bigrammid
+koigi_koned_bigram_filtered %>%
+    mutate(president = factor(president, levels = c("Lennart Meri",
+                                                    "Arnold Rüütel",
+                                                    "Toomas Hendrik Ilves"))) %>%
+    filter(!bigram %in% c("härra juhataja", "austatav riigikogu",
+                          "head kuulajad", "täpselt samamoodi", "austatavad riigikogu")) %>%
+    count(president, bigram, sort = TRUE) %>%
+    ungroup() %>%
+    # leia sõnade esinemissagedus
+    bind_tf_idf(bigram, president, n) %>%
+    arrange(desc(tf_idf)) %>%
+    group_by(president) %>% 
+    top_n(15) %>%
+    group_by(president) %>%
+    mutate(bigram = factor(bigram, levels = rev(unique(bigram)))) %>%
+    ungroup() %>%
+    ggplot(aes(bigram, tf_idf, fill = president)) +
+    geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+    labs(title = "Presidentidele iseloomulikud sõnaühendid kõnedes kokku",
+         x = NULL, y = NULL) +
+    scale_y_continuous(labels = comma) +
+    facet_wrap(~president, ncol = 2, scales = "free") +
+    coord_flip() +
+    theme_tufte() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_text(size = 9),
+          text = element_text(family = "Chivo"),
+          plot.title = element_text(size = 14, face = "bold"),
+          strip.text = element_text(size = 11))
+```
+
+Kui vaadata aastate lõikes kõigist kõnedest iseloomulikumaid sõnasid, siis joonistuvad välja nii aktuaalsed teemad vastavas ajahetkes: 2016 ja pagulased, 2014 ja Ukraina, 2013 ja rahvakogu ning varasemast näiteks 1995 ja Tšetšeenia sõda.
+
+```{r kokku_koned_aastate_loikes, fig.width = 8, fig.height = 10, warning=FALSE, message=FALSE}
+
+# Aastate lõikes kõige iseloomulikumad sõnad kõigis kõnedes kokku
+koigi_konede_sonad %>%
+    mutate(aasta = parse_character(year(kuupaev_date)),
+           periood = cut(parse_number(aasta), breaks = c(-Inf, 1996, 2001, 2006, 2011, 2016),
+                         labels = c("1992-1996", "1997-2001", "2002-2006", 
+                                    "2007-2011", "2012-2016")),
+           president = factor(president, levels = c("Lennart Meri",
+                                                    "Arnold Rüütel",
+                                                    "Toomas Hendrik Ilves"))) %>%
+    count(president, aasta, word, sort = TRUE) %>%
+    ungroup() %>%
+    # leia sõnade esinemissagedus
+    bind_tf_idf(word, aasta, n) %>%
+    arrange(desc(tf_idf)) %>%
+    group_by(aasta) %>% 
+    top_n(3) %>%
+    group_by(aasta) %>%
+    mutate(word = factor(word, levels = rev(unique(word)))) %>%
+    ungroup() %>%
+    ggplot(aes(word, tf_idf, fill = president)) +
+    geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+    labs(title = "Presidentidele iseloomulikud sõnad kõnedes aastate lõikes",
+         x = NULL, y = NULL) +
+    facet_wrap(~aasta, ncol = 3, scales = "free") +
+    coord_flip() +
+    theme_tufte() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_text(size = 9),
+          text = element_text(family = "Chivo"),
+          plot.title = element_text(size = 14, face = "bold"),
+          strip.text = element_text(size = 11),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())
+```
+
+### Positiivne ja negatiivne emotsioon kõnedes
+
+Lõpetuseks vaatan, milline on president Ilvese 24. veebruari kõnede emotsioon (pos vs neg) aastate lõikes. Selleks leian kõnede kõik emotsionaalselt laetud sõnad ning vaatan lausete kaupa, kas ülekaalus on positiivsed või negatiivsed sõnad. Kõige positiivsematena paistavad välja MASU-le eelnenud 2008. aasta kõne ning 2013. aasta kõned. Kõige negatiivsema fooniga tundub olema MASU-le järgnenud 2009. aaasta kõne.
+
+```{r emotsioon_konedes, fig.height = 9, fig.width = 8}
+# Kõnede emotsioon lausete lõikes läbi aastate
+konede_emotsioon <- vabariigi_aastapaeva_koned %>%
+    # igale lausele indeks külge
+    mutate(tekst_2 = tekst) %>%
+    unnest_tokens(sentence, tekst_2, token = "sentences") %>%
+    mutate(aasta = parse_character(year(kuupaev_date))) %>%
+    group_by(aasta) %>%
+    mutate(indeks = row_number()) %>%
+    ungroup() %>%
+    # leia kõik sõnad lausetest
+    unnest_tokens(word, sentence) %>%
+    #eemalda nn stoppsõnad
+    anti_join(stop_words_est, by = c("word" = "sona")) %>%
+    filter(!str_detect(word, "[0-9]")) %>%
+    # joini juurde sõnade emotsiooni kirjeldavad tunnused
+    inner_join(sonade_emotsioon_est %>%
+                   distinct(sona, emotsioon_nr, emotsioon_sona), by = c("word" = "sona")) %>%
+    # presidendi, aasta ja lause lõikes emotsioon (negatiivsed sõnad pluss positiivsed)
+    group_by(president, aasta, indeks) %>%
+    summarise(lause_emotsioon = sum(emotsioon_nr)) %>%
+    ungroup() %>%
+    # vaatan ainult president Ilvest
+    filter(president == "Toomas Hendrik Ilves")
+
+# joonista graafik
+ggplot() +
+    # positiivsed laused sinisega
+    geom_bar(data = konede_emotsioon %>%
+                 filter(lause_emotsioon > 0), aes(indeks, lause_emotsioon), 
+             alpha = 0.8, stat = "identity", show.legend = FALSE, fill = "#377eb8") +
+    # negatiivsed laused punasega
+    geom_bar(data = konede_emotsioon %>%
+                 filter(lause_emotsioon < 0), aes(indeks, lause_emotsioon), 
+             alpha = 0.8, stat = "identity", show.legend = FALSE, fill = "#e41a1c") +
+    labs(title = "President Ilvese aastapäeva kõnede emotsioon",
+         subtitle = "Tulbad näitavad positiivsete ja neatiivsete sõnade osakaalu lauses.\nSinine tulp tähendab, et ülekaalus on positiivsed sõnad ja punane, et negatiivsed.",
+         x = NULL, y = "lause emotsioon") + 
+    facet_wrap(~aasta, ncol = 2, scales = "free_x") +
+    theme_tufte() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_text(size = 9),
+          text = element_text(family = "Chivo"),
+          plot.title = element_text(size = 14, face = "bold"),
+          strip.text = element_text(size = 11),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())
+```
+
+
+### Kuidas?
+Antud analüüs põhineb paljuski R tekstianalüüsi võimalusi tutvustaval e-raamatul [Tidy Text Mining with R](http://tidytextmining.com/). Andmetöötluse käigus eemaldasin sõnade hulagast nn. stoppsõnad (väga kõrge esinemissagedusega sõnad, samuti ase-, kaas-, määr- ja sidesõnad ning paljud muud semantilist informatsiooni mittekandvad sõnad). Stoppsõnade nimekirja sain Raido Kodasmaa bakalaureusetööst [Infootsingus kasutatavad loomuliku keele töötluse tehnikad](http://dspace.ut.ee/handle/10062/32779?locale-attribute=en). Teksti emotsiooni tuvastamiseks kasutasin Eesti Keele Instituudi projekti "Kõne ja teksti emotsionaalsuse statistilised mudelid" raames koostatud valentsi sõnastikku [https://github.com/EKT1/valence](https://github.com/EKT1/valence).
+Kogu R skript koos [president.ee](http://president.ee) lehelt kraabitud presidentide kõnede korpusega asub Githubis [https://github.com/toomase/presidendi_koned](https://github.com/toomase/presidendi_koned).

@@ -1,0 +1,77 @@
+import feather
+from estnltk import Text
+import pandas as pd
+df = feather.read_dataframe('C:/Users/toomase/Dropbox/DataScience/R/presidendi_koned/data/uusaasta_koned.feather')
+
+koned = df['tekst_toodeldud']
+
+# for loop, mis leiab kõigi laulusõnade lemmad
+list_ = []
+for tekst_toodeldud in koned:
+    # estnltk paketist teksti formaati
+    text = Text(tekst_toodeldud)
+    # dataframe formaadis kõikide laulude sõnad ja lemmad
+    df = text.get.word_texts.lemmas.postag_descriptions.as_dataframe
+    # esimesed 10 tähte laulusõnadest, et sõnad hiljem koondtabeliga siduda
+    # df["tekst_toodeldud"] = tekst_toodeldud[:10]
+    # andmed ühte listi kokku
+    list_.append(df)
+    # listist dataframe
+    koned_lemmadega = pd.concat(list_)
+
+feather.write_dataframe(koned_lemmadega,
+'C:/Users/toomase/Dropbox/DataScience/R/presidendi_koned/data/uusaasta_koned_lemmadega.feather')
+
+
+feather.write_dataframe(koned_lausetega,
+'C:/Users/toomase/Dropbox/DataScience/R/presidendi_koned/data/uusaasta_koned_lausetega.feather')
+
+# for loop, mis leiab kõigi laulusõnade lemmad
+list_ = []
+for tekst_toodeldud in koned:
+    # estnltk paketist teksti formaati
+    text = Text(tekst_toodeldud)
+    # dataframe formaadis kõikide laulude sõnad ja lemmad
+    df = text.get.sentence_texts.as_dataframe
+    # esimesed 10 tähte laulusõnadest, et sõnad hiljem koondtabeliga siduda
+    # df["tekst_toodeldud"] = tekst_toodeldud[:10]
+    # andmed ühte listi kokku
+    list_.append(df)
+    # listist dataframe
+    koned_lausetega = pd.concat(list_)
+
+koned_lausetega
+
+# for loop, mis leiab kõigi laulusõnade lemmad
+list_ = []
+for tekst_toodeldud in koned:
+    # estnltk paketist teksti formaati
+    text = Text(tekst_toodeldud)
+    # dataframe formaadis kõikide laulude sõnad ja lemmad
+    df = text.get.clause_texts.as_dataframe
+    # esimesed 10 tähte laulusõnadest, et sõnad hiljem koondtabeliga siduda
+    # df["tekst_toodeldud"] = tekst_toodeldud[:10]
+    # andmed ühte listi kokku
+    list_.append(df)
+    # listist dataframe
+    koned_osalausetega = pd.concat(list_)
+
+koned_osalausetega
+
+
+>>> from estnltk import ClauseSegmenter
+>>> from estnltk import Text
+>>>
+>>> segmenter = ClauseSegmenter( ignore_missing_commas=True )
+>>> text = Text('Keegi teine ka siin ju kirjutas et ütles et saab ise asjadele järgi minna aga vastust seepeale ei tulnudki.', clause_segmenter= segmenter)
+>>>
+for clause in text.split_by('clauses'):
+print (clause.text)
+
+ text.clause_texts
+
+...
+Keegi teine ka siin ju kirjutas
+et ütles
+et saab ise asjadele järgi minna
+aga vastust seepeale ei tulnudki.
